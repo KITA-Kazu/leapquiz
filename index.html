@@ -550,3 +550,149 @@ const words = [
  </body>
 
 </html>
+
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>英語チェック＋ランキング</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 12px; }
+    h1 { margin: 0 0 8px; }
+    .box { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 12px 0; }
+    button { padding: 8px 14px; border-radius: 8px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
+    input { padding: 8px; width: 100%; max-width: 280px; }
+    ol { padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <h1>英語チェック & ランキング</h1>
+
+  <!-- 1) 名前を入れる -->
+  <div class="box">
+    <label>名前（ニックネームOK）</label><br/>
+    <input id="playerName" placeholder="例）いぶき太郎" />
+    <div style="margin-top:8px">
+      <button id="startBtn">スタート</button>
+    </div>
+    <small id="hello" style="display:block;margin-top:6px;color:#666"></small>
+  </div>
+
+  <!-- 2) クイズ本体（ここはあなたの既存コードに置き換えOK） -->
+  <div class="box" id="quizArea" style="display:none">
+    <p>ここにクイズを出す。（サンプルとして3問×各10点＝満点30にしてます）</p>
+    <button id="finishBtn">クイズ終了（サンプルで30点満点の乱数にします）</button>
+    <div id="result" style="margin-top:8px"></div>
+    <div style="margin-top:8px">
+      <button id="submitBtn" disabled>スコア送信</button>
+    </div>
+  </div>
+
+  <!-- 3) ランキング -->
+  <div class="box">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0">上位5人</h2>
+      <button id="reloadBtn">更新</button>
+    </div>
+    <ol id="leaderboard"><li>まだ誰もいません</li></ol>
+  </div>
+
+  <!-- Firebase公式の読み込み（CDN） -->
+  <script type="module">
+    // ★★★ ここにあなたの「Firebase設定」を貼り付けてね ★★★
+    // Firebaseコンソールの「SDKの設定と構成」から丸ごとコピペしてOK
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      // storageBucket は今回は未使用
+      // messagingSenderId も未使用
+      appId: "YOUR_APP_ID"
+    };
+
+    // ---- ここから下はそのままでOK ----
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+    import {
+      getFirestore, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db   = getFirestore(app);
+
+    // ① まずは匿名ログイン（ボタン押す前にやっとく）
+    signInAnonymously(auth).catch(console.error);
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        // ログインできたらランキングを1回読み込む
+        loadTop5();
+      }
+    });
+
+    // DOM取得
+    const nameInput = document.getElementById("playerName");
+    const startBtn  = document.getElementById("startBtn");
+    const quizArea  = document.getElementById("quizArea");
+    const finishBtn = document.getElementById("finishBtn");
+    const resultEl  = document.getElementById("result");
+    const submitBtn = document.getElementById("submitBtn");
+    const leaderboard = document.getElementById("leaderboard");
+    const hello = document.getElementById("hello");
+    const reloadBtn = document.getElementById("reloadBtn");
+
+    // 名前 → スタート
+    startBtn.addEventListener("click", () => {
+      const name = (nameInput.value || "").trim();
+      if (!name) { alert("名前を入れてな"); return; }
+      hello.textContent = `がんばってな、${name}さん！`;
+      quizArea.style.display = "block";
+    });
+
+    // サンプル：終了ボタンで点数を作る（0〜30点）
+    let currentScore = null;
+    finishBtn.addEventListener("click", () => {
+      // 本番はあなたの採点結果をここに入れる
+      currentScore = Math.floor(Math.random() * 31); // 満点30の例
+      resultEl.textContent = `あなたのスコア：${currentScore}点`;
+      submitBtn.disabled = false;
+    });
+
+    // スコア送信
+    submitBtn.addEventListener("click", async () => {
+      const name = (nameInput.value || "").trim() || "名無し";
+      if (currentScore == null) { alert("先にクイズを終わらせてな"); return; }
+      // Firestoreへ追加
+      await addDoc(collection(db, "scores"), {
+        name,
+        score: currentScore,
+        createdAt: serverTimestamp()
+      });
+      submitBtn.disabled = true;
+      await loadTop5();
+      alert("送信できたで！ランキングに反映されたか見てみてな");
+    });
+
+    // 上位5を読み込んで表示
+    async function loadTop5() {
+      const ref = collection(db, "scores");
+      // 点数が同じなら早い者勝ち（createdAtの早い順）
+      const q = query(ref, orderBy("score", "desc"), orderBy("createdAt", "asc"), limit(5));
+      const snap = await getDocs(q);
+      const rows = snap.docs.map((d, i) => {
+        const r = d.data();
+        return `<li>${i+1}. ${escapeHtml(r.name)} — ${r.score}点</li>`;
+      });
+      leaderboard.innerHTML = rows.length ? rows.join("") : "<li>まだ誰もいません</li>";
+    }
+
+    reloadBtn.addEventListener("click", loadTop5);
+
+    // かんたんエスケープ（XSS対策の最低限）
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+  </script>
+</body>
+</html>
